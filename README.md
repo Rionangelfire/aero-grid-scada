@@ -99,6 +99,15 @@ for the Tailwind CSS and Google Fonts CDNs (without them the simulation
 still runs, but unstyled). No server, install, or account is required.
 For the full styled experience, serve or open it with internet available.
 
+## Avatar announcement
+
+[Watch the 10-second avatar announcement](aero-grid-scada-avatar-announcement.mp4).
+The voice and likeness are simulated by AI, made for fun to walk through the
+announcement — that is not Robert's real voice, and the label is burned into
+the video itself. The on-screen graphics are AI-generated imagery, not
+screenshots of the simulator. One correction to the graphics: the manifest
+is SHA-256 checksums, not a cryptographic signature.
+
 ## Provenance
 
 The file was assembled from three incomplete sources — a revised (V2)
@@ -139,3 +148,4 @@ preserved in `sources/`.
 | `MANIFEST.sha256` | SHA-256 checksums of every file in this snapshot |
 | `sources/` | The three source files the assembly was built from |
 | `screenshots/` | Styled main view, fault-active view, archive modal |
+| `aero-grid-scada-avatar-announcement.mp4` | 10-second avatar announcement (AI voice/likeness, label burned in) |
