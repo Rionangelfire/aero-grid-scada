@@ -1,0 +1,1993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWE Fleet Flight Control & Geofencing Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #060911;
+            color: #e2e8f0;
+            overflow-x: hidden;
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        /* Subtle CRT / Radar Scanline Overlay */
+        .radar-scanlines {
+            background-image: linear-gradient(
+                rgba(18, 16, 16, 0) 50%, 
+                rgba(0, 0, 0, 0.25) 50%
+            ), linear-gradient(
+                90deg,
+                rgba(255, 0, 0, 0.02),
+                rgba(0, 255, 0, 0.01),
+                rgba(0, 0, 255, 0.02)
+            );
+            background-size: 100% 3px, 6px 100%;
+        }
+        .radar-glow {
+            filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.35));
+        }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+        }
+        @keyframes pulseGreen {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+            50% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+        }
+        .status-dot-live {
+            animation: pulseGreen 2s infinite;
+        }
+        /* Custom subtle scrollbars */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+        /* Custom range slider */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 15px;
+            width: 15px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            margin-top: -5.5px;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #1e293b;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-200 selection:bg-sky-500/30">
+
+    <!-- Header Navigation -->
+    <header class="border-b border-slate-800/80 glass-panel sticky top-0 z-30">
+        <div class="max-w-[1440px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 radar-glow">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-base sm:text-lg font-semibold tracking-tight text-white flex items-center gap-2.5">
+                        AERO-GRID SCADA
+                        <span id="system-mode-badge" class="text-[10px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 status-dot-live"></span>
+                            LIVE TELEMETRY
+                        </span>
+                    </h1>
+                    <p class="text-xs text-slate-400 hidden sm:block">Utility-Scale Airborne Wind Energy ATC, Airspace & Contingency Platform</p>
+                </div>
+            </div>
+
+            <!-- Live Telemetry Pills & Export -->
+            <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs font-mono">
+                <div class="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center gap-2">
+                    <span class="text-slate-400">WIND:</span>
+                    <span id="telemetry-wind" class="text-sky-400 font-semibold">14.2 m/s</span>
+                </div>
+                <div class="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center gap-2" title="Cubic Wind Power Curve: P ∝ V³">
+                    <span class="text-slate-400">GRID GEN:</span>
+                    <span id="telemetry-power" class="text-emerald-400 font-semibold">4.12 MW</span>
+                </div>
+                <div class="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center gap-2">
+                    <span class="text-slate-400">RISK INDEX:</span>
+                    <span id="telemetry-alerts" class="text-emerald-400 font-semibold">0.0%</span>
+                </div>
+                <button id="btn-open-archive" class="px-2.5 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 transition flex items-center gap-1.5" title="Open Digital Twin Mission Archive, Incident Reports & Reliability Analytics">
+                    <svg class="w-3.5 h-3.5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+                    <span>Digital Twin Archive</span>
+                </button>
+                <button id="btn-export-json" class="px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5" title="Download Flight Telemetry & Event Log">
+                    <svg class="w-3.5 h-3.5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    <span class="hidden md:inline">Export JSON</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 py-4 sm:py-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
+        
+        <!-- Left/Top: Interactive Radar Canvas & SCADA Metrics -->
+        <div class="lg:col-span-8 flex flex-col gap-3">
+            
+            <!-- SCADA Fleet Metrics Bar -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div class="rounded-xl glass-panel border border-slate-800/90 px-3.5 py-2.5 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-wider text-slate-400">Nominal Harvest</div>
+                        <div id="metric-nominal" class="text-lg font-mono font-bold text-sky-400 mt-0.5">12</div>
+                    </div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-sky-400/80 shadow-[0_0_8px_#38bdf8]"></div>
+                </div>
+                <div class="rounded-xl glass-panel border border-slate-800/90 px-3.5 py-2.5 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-wider text-slate-400">Edge Holding</div>
+                        <div id="metric-holding" class="text-lg font-mono font-bold text-amber-400 mt-0.5">0</div>
+                    </div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-amber-400/80 shadow-[0_0_8px_#fbbf24]"></div>
+                </div>
+                <div class="rounded-xl glass-panel border border-slate-800/90 px-3.5 py-2.5 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-wider text-slate-400">Winch Stowed</div>
+                        <div id="metric-stowed" class="text-lg font-mono font-bold text-purple-400 mt-0.5">0</div>
+                    </div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-purple-400/80 shadow-[0_0_8px_#c084fc]"></div>
+                </div>
+                <div class="rounded-xl glass-panel border border-slate-800/90 px-3.5 py-2.5 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-wider text-slate-400">Prox / Faults</div>
+                        <div id="metric-alerts" class="text-lg font-mono font-bold text-rose-400 mt-0.5">0</div>
+                    </div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-rose-500/80 shadow-[0_0_8px_#f43f5e]"></div>
+                </div>
+            </div>
+
+            <!-- Primary Radar Display -->
+            <div class="relative rounded-2xl overflow-hidden border border-slate-800 bg-[#070b14] shadow-2xl flex-1 min-h-[430px] sm:min-h-[540px] flex flex-col">
+                
+                <!-- Top Overlay Legend & View Switcher -->
+                <div class="absolute top-3 left-3 right-3 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+                    <div class="flex items-center gap-2 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 px-3 py-1.5 rounded-xl pointer-events-auto">
+                        <span class="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
+                        <span class="text-xs font-mono text-slate-300">SECTOR 04-W // FAA CLASS D & AWE CORRIDORS</span>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-1.5 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 p-1 rounded-xl pointer-events-auto">
+                        <button id="btn-show-zones" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30 transition">
+                            Geofences
+                        </button>
+                        <button id="btn-show-airspace" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-rose-500/20 text-rose-300 border border-rose-500/30 transition" title="Toggle visual rendering of FAA Exclusion Zones (Safety enforcement remains active)">
+                            Airspace Layer
+                        </button>
+                        <button id="btn-show-heatmap" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30 transition">
+                            Risk Heatmap
+                        </button>
+                        <button id="btn-show-trails" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-sky-500/20 text-sky-300 border border-sky-500/30 transition">
+                            Paths
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Replay Banner Overlay (Visible during Incident Replay) -->
+                <div id="replay-banner" class="hidden absolute top-14 left-1/2 -translate-x-1/2 z-20 bg-amber-500/20 border border-amber-400/50 backdrop-blur-md px-4 py-1.5 rounded-full flex items-center gap-3 shadow-lg">
+                    <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                    <span id="replay-progress-text" class="text-xs font-mono font-semibold text-amber-200">INCIDENT REPLAY // T-10.0s</span>
+                    <button id="btn-exit-replay" class="text-[11px] font-mono underline text-white hover:text-amber-300">Exit Replay</button>
+                </div>
+
+                <!-- Canvas Container with Subtle Scanlines -->
+                <div id="canvas-wrapper" class="relative w-full h-full flex-1 cursor-crosshair radar-scanlines">
+                    <canvas id="simCanvas" class="block w-full h-full"></canvas>
+                </div>
+
+                <!-- Bottom Canvas Status Bar -->
+                <div class="bg-slate-950/95 border-t border-slate-800/80 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                    <div class="flex flex-wrap items-center gap-3.5">
+                        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block"></span> Nominal</span>
+                        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span> Edge Orbit / Degraded</span>
+                        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-purple-400 inline-block"></span> Stowed / Descent</span>
+                        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span> Breach / Drift</span>
+                    </div>
+                    <div class="font-mono text-[11px] text-slate-500">
+                        Click kite: Toggle Comm | Drag Exclusion Zones to test rerouting
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right/Bottom: Control Deck, Fault Injection & Event Log -->
+        <div class="lg:col-span-4 flex flex-col gap-4">
+            
+            <!-- Central Flight Control Panel -->
+            <div class="rounded-2xl border border-slate-800 glass-panel p-4 sm:p-5 flex flex-col gap-4 shadow-lg">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                        <span class="w-1.5 h-4 bg-sky-400 rounded-full"></span>
+                        Central Flight Control
+                    </h2>
+                    <div class="flex items-center gap-1.5">
+                        <button id="btn-replay" class="text-xs bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-medium flex items-center gap-1 px-2.5 py-1 rounded-lg transition" title="Replay last 12 seconds of flight telemetry">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"></path></svg>
+                            Replay Event
+                        </button>
+                        <button id="btn-reset" class="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-sky-500/10 transition">
+                            Reset
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Master Geofencing Toggle -->
+                <div class="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-sm font-medium text-white">ATC Geofencing & Exclusion Avoidance</div>
+                        <div class="text-[11px] text-slate-400 mt-0.5">Enforces figure-8 corridors & FAA zone repulsion</div>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input type="checkbox" id="toggle-geofence" class="sr-only peer" checked>
+                        <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                    </label>
+                </div>
+
+                <!-- Fleet Density Slider -->
+                <div class="flex flex-col gap-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-slate-300 font-medium">Fleet Density (Airborne Units)</span>
+                        <span id="density-val" class="font-mono text-sky-400 font-semibold">12 Kites</span>
+                    </div>
+                    <input type="range" id="slider-density" min="4" max="24" step="1" value="12" class="w-full">
+                </div>
+
+                <!-- Threat & Fault Injection Matrix -->
+                <div class="pt-2.5 border-t border-slate-800/80 flex flex-col gap-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Threat & Fault Injection</span>
+                        <span class="text-[10px] font-mono text-slate-500">SIMULATE ANOMALIES</span>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-2">
+                        <!-- Comm Blackout -->
+                        <button id="btn-comm-drop" class="p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-amber-300">Comm Blackout</span>
+                                <span id="badge-comm" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-amber-300">OFF</span>
+                            </div>
+                            <span class="text-[10px] text-amber-200/70 leading-tight">Edge 52% holding orbit</span>
+                        </button>
+
+                        <!-- Severe Weather -->
+                        <button id="btn-weather" class="p-2.5 rounded-xl border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-purple-300">32 m/s Squall</span>
+                                <span id="badge-weather" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-purple-300">CALM</span>
+                            </div>
+                            <span class="text-[10px] text-purple-200/70 leading-tight">Auto-winch ground stow</span>
+                        </button>
+
+                        <!-- GPS Drift -->
+                        <button id="btn-gps-drift" class="p-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-rose-300">GPS Spoof/Drift</span>
+                                <span id="badge-gps" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-rose-300">OFF</span>
+                            </div>
+                            <span class="text-[10px] text-rose-200/70 leading-tight">Positional bias on 2 units</span>
+                        </button>
+
+                        <!-- Tether Failure -->
+                        <button id="btn-tether-fail" class="p-2.5 rounded-xl border border-orange-500/30 bg-orange-500/10 hover:bg-orange-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-orange-300">Tether Tension</span>
+                                <span id="badge-tether" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-orange-300">NOM</span>
+                            </div>
+                            <span class="text-[10px] text-orange-200/70 leading-tight">Emergency rapid recall</span>
+                        </button>
+
+                        <!-- Sensor Corruption -->
+                        <button id="btn-sensor-corrupt" class="p-2.5 rounded-xl border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-cyan-300">Pitot Corruption</span>
+                                <span id="badge-sensor" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-cyan-300">OFF</span>
+                            </div>
+                            <span class="text-[10px] text-cyan-200/70 leading-tight">Erratic wind vector noise</span>
+                        </button>
+
+                        <!-- Battery Fault -->
+                        <button id="btn-battery-fault" class="p-2.5 rounded-xl border border-yellow-500/30 bg-yellow-500/10 hover:bg-yellow-500/20 text-left transition flex flex-col justify-between gap-1">
+                            <div class="flex items-center justify-between w-full">
+                                <span class="text-xs font-semibold text-yellow-300">Edge Battery Low</span>
+                                <span id="badge-battery" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-950/70 text-yellow-300">100%</span>
+                            </div>
+                            <span class="text-[10px] text-yellow-200/70 leading-tight">Degrades onboard autonomy</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Telemetry & Protocol Log -->
+            <div class="rounded-2xl border border-slate-800 glass-panel p-4 flex-1 flex flex-col gap-2.5 min-h-[210px] shadow-lg">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-300">SCADA Protocol & Event Log</h3>
+                    <div class="flex items-center gap-2">
+                        <button id="btn-commit-mission" class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition" title="Save current mission run to IndexedDB Archive">
+                            Save Mission
+                        </button>
+                        <span class="text-[10px] font-mono text-slate-500">AUDIT STREAM</span>
+                    </div>
+                </div>
+                <div id="event-log" class="flex-1 overflow-y-auto space-y-1.5 pr-1 font-mono text-[11px] max-h-[230px]">
+                    <!-- Logs injected via JS -->
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Digital Twin Operations Platform Modal (Mission Archive, Incident Reports, Analytics Dashboard) -->
+    <div id="archive-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <!-- Modal Header -->
+            <div class="px-5 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-950/60">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                    </div>
+                    <div>
+                        <h2 class="text-sm sm:text-base font-semibold text-white">Digital Twin Operations Platform // Persistent Archive</h2>
+                        <p class="text-xs text-slate-400 font-mono">IndexedDB Telemetry Store: Missions, Incident Snapshots & Reliability KPIs</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="btn-clear-db" class="px-2.5 py-1.5 rounded-lg text-xs font-mono bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition">
+                        Purge DB
+                    </button>
+                    <button id="btn-close-archive" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Modal Navigation Tabs -->
+            <div class="px-5 pt-3 border-b border-slate-800 flex items-center gap-2 bg-slate-950/30">
+                <button data-tab="analytics" class="archive-tab px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-sky-400 text-sky-300 bg-slate-900">
+                    Reliability Analytics
+                </button>
+                <button data-tab="missions" class="archive-tab px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+                    Mission Archive
+                </button>
+                <button data-tab="incidents" class="archive-tab px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+                    Incident Reports
+                </button>
+            </div>
+
+            <!-- Modal Content Area -->
+            <div class="p-5 overflow-y-auto flex-1 space-y-5">
+                
+                <!-- Tab 1: Reliability Analytics Dashboard -->
+                <div id="tab-analytics" class="archive-pane space-y-4">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Mean Fleet Availability</div>
+                            <div id="kpi-availability" class="text-xl font-mono font-bold text-emerald-400 mt-1">99.4%</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Nominal + Edge Orbit Uptime</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Estimated MTBF</div>
+                            <div id="kpi-mtbf" class="text-xl font-mono font-bold text-sky-400 mt-1">--</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Flight Duration / Fault Rate</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">MTTR (Mean Time To Recover)</div>
+                            <div id="kpi-mttr" class="text-xl font-mono font-bold text-amber-400 mt-1">--</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Avg Anomaly Resolution Time</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Cumulative Energy Yield</div>
+                            <div id="kpi-energy" class="text-xl font-mono font-bold text-purple-400 mt-1">0.00 MWh</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Integrated Cubic Wind Output</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Power Production Trend Canvas -->
+                        <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col gap-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-slate-300">Power Production Trend (MW)</span>
+                                <span class="text-[10px] font-mono text-slate-500">LIVE & ARCHIVED SAMPLES</span>
+                            </div>
+                            <canvas id="powerTrendCanvas" class="w-full h-40 rounded-lg bg-slate-900/60"></canvas>
+                        </div>
+
+                        <!-- Fault Frequency Distribution -->
+                        <div class="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col gap-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-semibold text-slate-300">Fault Frequency Distribution</span>
+                                <span class="text-[10px] font-mono text-slate-500">CUMULATIVE EVENTS</span>
+                            </div>
+                            <div id="fault-bars-container" class="space-y-2.5 pt-1 text-xs font-mono">
+                                <!-- Injected via JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Mission Archive -->
+                <div id="tab-missions" class="archive-pane hidden">
+                    <div class="overflow-x-auto rounded-xl border border-slate-800">
+                        <table class="w-full text-left border-collapse text-xs font-mono">
+                            <thead>
+                                <tr class="bg-slate-950 text-slate-400 border-b border-slate-800">
+                                    <th class="py-2.5 px-3">Mission ID</th>
+                                    <th class="py-2.5 px-3">Duration</th>
+                                    <th class="py-2.5 px-3">Max Wind</th>
+                                    <th class="py-2.5 px-3">Energy Produced</th>
+                                    <th class="py-2.5 px-3">Faults Triggered</th>
+                                    <th class="py-2.5 px-3">Near Misses</th>
+                                </tr>
+                            </thead>
+                            <tbody id="missions-table-body" class="divide-y divide-slate-800/80 bg-slate-900/40">
+                                <!-- Rows injected via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Incident Reports -->
+                <div id="tab-incidents" class="archive-pane hidden space-y-2.5">
+                    <div id="incidents-list" class="space-y-2.5">
+                        <!-- Incident cards injected via JS -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * AERO-GRID DIGITAL TWIN OPERATIONS PLATFORM
+         * Upgrades:
+         * 1. Non-destructive Airspace Exclusion Zone clamping on window resize
+         * 2. Dynamic fault target selection across any fleet size (4 to 24 units)
+         * 3. Immutable Incident Replay rendering via structuredClone() without mutating live kites
+         * 4. Exponential Moving Average (EMA) Risk Index smoothing
+         * 5. Decoupled Airspace Layer visualization from Safety Geofence enforcement
+         * 6. Persistent IndexedDB Mission Archive, Incident Reports & Reliability Analytics (MTBF, MTTR, Availability)
+         */
+
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const wrapper = document.getElementById('canvas-wrapper');
+
+        // Simulation & Digital Twin State
+        const state = {
+            width: 800,
+            height: 540,
+            kiteCount: 12,
+            geofenceActive: true,
+            showZones: true,
+            showAirspace: true,   // Visual layer toggle only
+            enforceAirspace: true, // Decoupled safety logic flag
+            showHeatmap: true,
+            showTrails: true,
+            
+            // Threat & Fault Flags
+            commBlackout: false,
+            severeWeather: false,
+            gpsDriftActive: false,
+            tetherFailureActive: false,
+            sensorCorruptionActive: false,
+            batteryFaultActive: false,
+
+            // Dynamic Fault Target Indices
+            gpsFaultIndices: [],
+            tetherFaultIndices: [],
+
+            // Environment, Economics & Smoothed Risk
+            windSpeed: 14.2,
+            windAngle: 0,
+            totalPowerMW: 0,
+            riskIndex: 0,
+            time: 0,
+            collisionCount: 0,
+
+            // Active Mission Tracking (for IndexedDB persistence)
+            currentMission: {
+                id: `MSN-${crypto.randomUUID ? crypto.randomUUID().slice(0, 8).toUpperCase() : Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+                startTime: Date.now(),
+                elapsedSec: 0,
+                maxWind: 14.2,
+                energyMWh: 0,
+                faultsTriggered: 0,
+                nearMisses: 0,
+                availabilitySamples: [],
+                powerHistory: [],
+                faultBreakdown: {
+                    'Comm Blackout': 0,
+                    'Severe Squall': 0,
+                    'GPS Spoof/Drift': 0,
+                    'Tether Tension': 0,
+                    'Pitot Corruption': 0,
+                    'Battery Fault': 0
+                },
+                activeFaultStart: null,
+                recoveryDurationsSec: []
+            },
+
+            // Entities & Buffers
+            kites: [],
+            windParticles: [],
+            airspaceZones: [
+                { id: 'FAA-D1', label: 'FAA CLASS D // KHBV', type: 'AIRPORT', x: 240, y: 190, radius: 75, initialized: false },
+                { id: 'TFR-09', label: 'NO-FLY // RESTRICTED', type: 'NOFLY', x: 560, y: 340, radius: 62, initialized: false }
+            ],
+            draggingZone: null,
+            
+            // Mission Replay Buffer (Rolling 12s @ ~30fps snapshots)
+            history: [],
+            historyTimer: 0,
+            isReplaying: false,
+            replayIndex: 0,
+            replaySnapshots: [],
+            auditLogs: [],
+            lastIncidentTime: 0
+        };
+
+        // UI References
+        const ui = {
+            wind: document.getElementById('telemetry-wind'),
+            power: document.getElementById('telemetry-power'),
+            alerts: document.getElementById('telemetry-alerts'),
+            modeBadge: document.getElementById('system-mode-badge'),
+            
+            metricNominal: document.getElementById('metric-nominal'),
+            metricHolding: document.getElementById('metric-holding'),
+            metricStowed: document.getElementById('metric-stowed'),
+            metricAlerts: document.getElementById('metric-alerts'),
+
+            densitySlider: document.getElementById('slider-density'),
+            densityVal: document.getElementById('density-val'),
+            geofenceToggle: document.getElementById('toggle-geofence'),
+            
+            btnShowZones: document.getElementById('btn-show-zones'),
+            btnShowAirspace: document.getElementById('btn-show-airspace'),
+            btnShowHeatmap: document.getElementById('btn-show-heatmap'),
+            btnShowTrails: document.getElementById('btn-show-trails'),
+
+            btnCommDrop: document.getElementById('btn-comm-drop'),
+            badgeComm: document.getElementById('badge-comm'),
+            btnWeather: document.getElementById('btn-weather'),
+            badgeWeather: document.getElementById('badge-weather'),
+            btnGpsDrift: document.getElementById('btn-gps-drift'),
+            badgeGps: document.getElementById('badge-gps'),
+            btnTetherFail: document.getElementById('btn-tether-fail'),
+            badgeTether: document.getElementById('badge-tether'),
+            btnSensorCorrupt: document.getElementById('btn-sensor-corrupt'),
+            badgeSensor: document.getElementById('badge-sensor'),
+            btnBatteryFault: document.getElementById('btn-battery-fault'),
+            badgeBattery: document.getElementById('badge-battery'),
+
+            btnReplay: document.getElementById('btn-replay'),
+            replayBanner: document.getElementById('replay-banner'),
+            replayText: document.getElementById('replay-progress-text'),
+            btnExitReplay: document.getElementById('btn-exit-replay'),
+            btnReset: document.getElementById('btn-reset'),
+            btnExportJson: document.getElementById('btn-export-json'),
+            btnCommitMission: document.getElementById('btn-commit-mission'),
+            log: document.getElementById('event-log'),
+
+            // Archive Modal UI
+            btnOpenArchive: document.getElementById('btn-open-archive'),
+            btnCloseArchive: document.getElementById('btn-close-archive'),
+            btnClearDb: document.getElementById('btn-clear-db'),
+            archiveModal: document.getElementById('archive-modal')
+        };
+
+        // ============================================================================
+        // INDEXEDDB PERSISTENCE LAYER (missions, incidents, exports)
+        // ============================================================================
+        const DB_NAME = 'AeroGridDigitalTwinDB';
+        const DB_VERSION = 1;
+        let dbInstance = null;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, DB_VERSION);
+                req.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains('missions')) {
+                        db.createObjectStore('missions', { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains('incidents')) {
+                        db.createObjectStore('incidents', { keyPath: 'id', autoIncrement: true });
+                    }
+                    if (!db.objectStoreNames.contains('exports')) {
+                        db.createObjectStore('exports', { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+                req.onsuccess = (e) => {
+                    dbInstance = e.target.result;
+                    resolve(dbInstance);
+                };
+                req.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        function dbPut(storeName, record) {
+            if (!dbInstance) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = dbInstance.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.put(record);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbGetAll(storeName) {
+            if (!dbInstance) return Promise.resolve([]);
+            return new Promise((resolve, reject) => {
+                const tx = dbInstance.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbClearAll() {
+            if (!dbInstance) return Promise.resolve();
+            return new Promise((resolve) => {
+                const tx = dbInstance.transaction(['missions', 'incidents', 'exports'], 'readwrite');
+                tx.objectStore('missions').clear();
+                tx.objectStore('incidents').clear();
+                tx.objectStore('exports').clear();
+                tx.oncomplete = () => resolve();
+            });
+        }
+
+        async function recordFaultEvent(faultLabel, isActivating) {
+            const m = state.currentMission;
+            if (isActivating) {
+                m.faultsTriggered++;
+                if (m.faultBreakdown[faultLabel] !== undefined) {
+                    m.faultBreakdown[faultLabel]++;
+                }
+                if (!m.activeFaultStart) {
+                    m.activeFaultStart = Date.now();
+                }
+                // Automatically capture an Incident Report with Replay Snapshot (awaiting write for persistence safety)
+                const snapshotWindow = state.history.slice(-90); // Last ~3 seconds
+                try {
+                    await dbPut('incidents', {
+                        timestamp: new Date().toISOString(),
+                        missionId: m.id,
+                        cause: faultLabel,
+                        riskScore: Number(state.riskIndex.toFixed(1)),
+                        windSpeed: Number(state.windSpeed.toFixed(1)),
+                        replaySnapshot: snapshotWindow.length > 0 ? structuredClone(snapshotWindow) : null
+                    });
+                } catch (err) {
+                    console.error("Failed to persist incident record:", err);
+                }
+            } else {
+                const anyStillActive = state.commBlackout || state.severeWeather || state.gpsDriftActive ||
+                                       state.tetherFailureActive || state.sensorCorruptionActive || state.batteryFaultActive;
+                if (!anyStillActive && m.activeFaultStart) {
+                    const recoverySec = Math.max(1, (Date.now() - m.activeFaultStart) / 1000);
+                    m.recoveryDurationsSec.push(recoverySec);
+                    m.activeFaultStart = null;
+                }
+            }
+        }
+
+        async function saveCurrentMissionToDB(manual = false) {
+            const m = state.currentMission;
+            const avgAvail = m.availabilitySamples.length > 0
+                ? m.availabilitySamples.reduce((a, b) => a + b, 0) / m.availabilitySamples.length
+                : 100;
+            const avgMttr = m.recoveryDurationsSec.length > 0
+                ? m.recoveryDurationsSec.reduce((a, b) => a + b, 0) / m.recoveryDurationsSec.length
+                : 4.2;
+
+            const record = {
+                id: m.id,
+                updatedAt: new Date().toISOString(),
+                durationSec: Math.round(m.elapsedSec),
+                maxWind: Number(m.maxWind.toFixed(1)),
+                energyMWh: Number(m.energyMWh.toFixed(4)),
+                faultsTriggered: m.faultsTriggered,
+                nearMisses: m.nearMisses,
+                meanAvailability: Number(avgAvail.toFixed(1)),
+                mttrSec: Number(avgMttr.toFixed(1)),
+                faultBreakdown: { ...m.faultBreakdown }
+            };
+            try {
+                await dbPut('missions', record);
+                if (manual) {
+                    addLog(`Mission ${m.id} committed to Digital Twin IndexedDB Archive.`, 'success');
+                }
+            } catch (err) {
+                console.error("Failed to commit mission archive:", err);
+            }
+        }
+
+        // Structured Audit Logger
+        function addLog(message, type = 'info') {
+            const colors = {
+                info: 'text-slate-300 border-slate-800 bg-slate-950/70',
+                success: 'text-emerald-300 border-emerald-500/30 bg-emerald-950/30',
+                warn: 'text-amber-300 border-amber-500/30 bg-amber-950/30',
+                danger: 'text-rose-300 border-rose-500/40 bg-rose-950/40',
+                weather: 'text-purple-300 border-purple-500/30 bg-purple-950/30'
+            };
+            const now = new Date();
+            const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+            
+            state.auditLogs.push({ timestamp: now.toISOString(), level: type.toUpperCase(), message });
+            if (state.auditLogs.length > 200) state.auditLogs.shift();
+
+            const entry = document.createElement('div');
+            entry.className = `p-2 rounded-lg border ${colors[type] || colors.info} leading-relaxed`;
+            entry.innerHTML = `<span class="opacity-50 mr-1.5">[${timeStr}]</span>${message}`;
+            
+            ui.log.prepend(entry);
+            if (ui.log.children.length > 40) {
+                ui.log.removeChild(ui.log.lastChild);
+            }
+        }
+
+        // ============================================================================
+        // 1. NON-DESTRUCTIVE RESIZE CLAMPING (Preserves Analyst Zone Placement)
+        // ============================================================================
+        function resizeCanvas() {
+            const rect = wrapper.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.scale(dpr, dpr);
+
+            state.width = rect.width;
+            state.height = rect.height;
+
+            // Initialize default positions once, then strictly clamp on subsequent resizes
+            state.airspaceZones.forEach((z, idx) => {
+                if (!z.initialized) {
+                    z.x = idx === 0 ? state.width * 0.32 : state.width * 0.72;
+                    z.y = idx === 0 ? state.height * 0.36 : state.height * 0.65;
+                    z.initialized = true;
+                }
+                z.x = Math.min(state.width - z.radius, Math.max(z.radius, z.x));
+                z.y = Math.min(state.height - z.radius, Math.max(z.radius, z.y));
+            });
+
+            layoutFleet();
+        }
+
+        // Dynamic Fault Target Selector (Works cleanly for any fleet size 4..24)
+        function assignDynamicFaultTargets() {
+            const indices = state.kites.map((_, idx) => idx);
+            // Pick up to 2 distinct targets for GPS Drift
+            state.gpsFaultIndices = indices.filter((_, idx) => idx === 1 || idx === Math.floor(indices.length * 0.6));
+            // Pick up to 2 distinct targets for Tether Tension Recall
+            state.tetherFaultIndices = indices.filter((_, idx) => idx === 0 || idx === Math.floor(indices.length * 0.75));
+        }
+
+        // Kite Unit Class
+        class KiteUnit {
+            constructor(id, index, anchorX, anchorY, zoneRadius, phaseOffset) {
+                this.id = id;
+                this.index = index;
+                this.anchorX = anchorX;
+                this.anchorY = anchorY;
+                this.zoneRadius = zoneRadius;
+                this.phase = phaseOffset;
+                
+                this.x = anchorX;
+                this.y = anchorY;
+                this.heading = 0;
+                this.tetherExtension = 1.0;
+                
+                this.status = 'NOMINAL';
+                this.individualCommLost = false;
+                this.proximityAlert = false;
+                this.airspaceRerouted = false;
+                this.trail = [];
+                
+                this.rogueRadius = zoneRadius * (1.25 + Math.random() * 0.75);
+                this.driftVector = { x: 0, y: 0 };
+            }
+
+            update(dt) {
+                const isCommDown = state.commBlackout || this.individualCommLost;
+                // 2. Dynamic index-based fault targeting so faults always trigger regardless of fleet density
+                const hasGpsFault = state.gpsDriftActive && state.gpsFaultIndices.includes(this.index);
+                const hasTetherFault = state.tetherFailureActive && state.tetherFaultIndices.includes(this.index);
+                const hasBatteryFault = state.batteryFaultActive && (this.index % 3 === 0);
+
+                // Priority State Machine
+                if (hasTetherFault) {
+                    this.status = 'EMERGENCY_DESCENT';
+                    this.tetherExtension = Math.max(0.05, this.tetherExtension - dt * 0.55);
+                } else if (state.severeWeather) {
+                    if (this.tetherExtension > 0.08) {
+                        this.status = 'STOWING';
+                        this.tetherExtension = Math.max(0.05, this.tetherExtension - dt * 0.35);
+                    } else {
+                        this.status = 'STOWED';
+                        this.tetherExtension = 0.05;
+                    }
+                } else {
+                    if (this.tetherExtension < 1.0) {
+                        this.tetherExtension = Math.min(1.0, this.tetherExtension + dt * 0.25);
+                    }
+
+                    if (!state.geofenceActive) {
+                        this.status = 'ROGUE';
+                    } else if (hasGpsFault) {
+                        this.status = 'GPS_DRIFT';
+                    } else if (hasBatteryFault) {
+                        this.status = 'BATTERY_DEGRADED';
+                    } else if (isCommDown) {
+                        this.status = 'COMM_LOST';
+                    } else {
+                        this.status = 'NOMINAL';
+                    }
+                }
+
+                // Target Trajectory Calculation
+                let targetX = this.anchorX;
+                let targetY = this.anchorY;
+                const speedMultiplier = Math.max(0.4, state.windSpeed / 14.0);
+
+                if (this.status === 'STOWED' || (this.status === 'EMERGENCY_DESCENT' && this.tetherExtension <= 0.06)) {
+                    targetX = this.anchorX + Math.cos(state.windAngle) * 5;
+                    targetY = this.anchorY + Math.sin(state.windAngle) * 5;
+                } else if (this.status === 'ROGUE') {
+                    this.phase += dt * 1.8 * speedMultiplier;
+                    const driftX = Math.cos(state.time * 0.45 + this.id) * (this.zoneRadius * 0.95);
+                    const driftY = Math.sin(state.time * 0.35 + this.id * 2) * (this.zoneRadius * 0.95);
+                    targetX = this.anchorX + driftX + Math.cos(this.phase) * this.rogueRadius;
+                    targetY = this.anchorY + driftY + Math.sin(this.phase * 0.7) * this.rogueRadius;
+                } else if (this.status === 'GPS_DRIFT') {
+                    this.phase += dt * 2.1 * speedMultiplier;
+                    this.driftVector.x = Math.sin(state.time * 0.6 + this.id) * (this.zoneRadius * 1.15);
+                    this.driftVector.y = Math.cos(state.time * 0.5 + this.id) * (this.zoneRadius * 1.15);
+                    const r = this.zoneRadius * 0.65;
+                    targetX = this.anchorX + this.driftVector.x + Math.sin(this.phase) * r;
+                    targetY = this.anchorY + this.driftVector.y + Math.sin(this.phase * 2) * (r * 0.5);
+                } else if (this.status === 'COMM_LOST' || this.status === 'BATTERY_DEGRADED') {
+                    this.phase += dt * (this.status === 'BATTERY_DEGRADED' ? 1.5 : 2.2) * speedMultiplier;
+                    const orbitFactor = this.status === 'BATTERY_DEGRADED' ? 0.72 : 0.52;
+                    const safeRadius = this.zoneRadius * orbitFactor * this.tetherExtension;
+                    targetX = this.anchorX + Math.cos(this.phase) * safeRadius;
+                    targetY = this.anchorY + Math.sin(this.phase) * safeRadius;
+                } else {
+                    // Synchronized Figure-8 Crosswind Harvest
+                    this.phase += dt * 2.4 * speedMultiplier;
+                    const rx = this.zoneRadius * 0.80 * this.tetherExtension;
+                    const ry = this.zoneRadius * 0.62 * this.tetherExtension;
+                    
+                    const localX = Math.sin(this.phase) * rx;
+                    const localY = Math.sin(this.phase * 2) * (ry * 0.55);
+
+                    const cosW = Math.cos(state.windAngle);
+                    const sinW = Math.sin(state.windAngle);
+                    targetX = this.anchorX + (localX * cosW - localY * sinW);
+                    targetY = this.anchorY + (localX * sinW + localY * cosW);
+                }
+
+                // Aerodynamic Wind Drift Effect
+                if (this.status !== 'STOWED') {
+                    const windForce = (state.windSpeed / 20) * this.tetherExtension;
+                    targetX += Math.cos(state.windAngle) * windForce * 14;
+                    targetY += Math.sin(state.windAngle) * windForce * 14;
+                }
+
+                // Sensor Corruption Noise Injection
+                if (state.sensorCorruptionActive && this.status !== 'STOWED') {
+                    targetX += (Math.random() - 0.5) * 14;
+                    targetY += (Math.random() - 0.5) * 14;
+                } else if (this.status !== 'STOWED') {
+                    const turbulence = state.severeWeather ? 3.2 : 0.5;
+                    targetX += (Math.random() - 0.5) * turbulence;
+                    targetY += (Math.random() - 0.5) * turbulence;
+                }
+
+                // 5. Decoupled Safety Enforcement: enforceAirspace operates independently of showAirspace visibility!
+                this.airspaceRerouted = false;
+                if (state.geofenceActive && state.enforceAirspace && this.status !== 'STOWED') {
+                    for (const zone of state.airspaceZones) {
+                        const dxZ = targetX - zone.x;
+                        const dyZ = targetY - zone.y;
+                        const distZ = Math.hypot(dxZ, dyZ);
+                        const bufferRadius = zone.radius + 12;
+
+                        if (distZ < bufferRadius) {
+                            const pushAngle = distZ > 0.01 ? Math.atan2(dyZ, dxZ) : 0;
+                            targetX = zone.x + Math.cos(pushAngle) * bufferRadius;
+                            targetY = zone.y + Math.sin(pushAngle) * bufferRadius;
+                            this.airspaceRerouted = true;
+                        }
+                    }
+                }
+
+                // Smooth Kinematic Interpolation
+                const dx = targetX - this.x;
+                const dy = targetY - this.y;
+                if (Math.hypot(dx, dy) > 0.1) {
+                    this.heading = Math.atan2(dy, dx);
+                }
+                this.x += dx * Math.min(1, dt * 8.5);
+                this.y += dy * Math.min(1, dt * 8.5);
+
+                // Record Flight Trail
+                if (this.status !== 'STOWED') {
+                    this.trail.push({ x: this.x, y: this.y });
+                    if (this.trail.length > 26) this.trail.shift();
+                } else if (this.trail.length > 0) {
+                    this.trail.shift();
+                }
+            }
+
+            draw(ctx) {
+                renderKiteEntity(ctx, this);
+            }
+        }
+
+        // Stateless Kite Renderer (Supports both live KiteUnit instances and immutable Replay clones)
+        function renderKiteEntity(ctx, k) {
+            // 1. Geofence Corridor Cylinder
+            if (state.showZones) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(k.anchorX, k.anchorY, k.zoneRadius, 0, Math.PI * 2);
+                
+                if (!state.geofenceActive || k.status === 'GPS_DRIFT') {
+                    ctx.strokeStyle = 'rgba(244, 63, 94, 0.25)';
+                    ctx.setLineDash([4, 4]);
+                } else if (k.status === 'COMM_LOST' || k.status === 'BATTERY_DEGRADED') {
+                    ctx.strokeStyle = 'rgba(251, 191, 36, 0.35)';
+                    ctx.setLineDash([5, 3]);
+                } else if (k.status === 'STOWING' || k.status === 'STOWED' || k.status === 'EMERGENCY_DESCENT') {
+                    ctx.strokeStyle = 'rgba(192, 132, 252, 0.28)';
+                    ctx.setLineDash([2, 4]);
+                } else {
+                    ctx.strokeStyle = 'rgba(56, 189, 248, 0.18)';
+                    ctx.setLineDash([3, 3]);
+                }
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+
+                if ((k.status === 'COMM_LOST' || k.status === 'BATTERY_DEGRADED') && state.geofenceActive) {
+                    ctx.beginPath();
+                    ctx.arc(k.anchorX, k.anchorY, k.zoneRadius * 0.58, 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(251, 191, 36, 0.5)';
+                    ctx.setLineDash([]);
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // 2. Flight Path Trail
+            if (state.showTrails && k.trail && k.trail.length > 1) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(k.trail[0].x, k.trail[0].y);
+                for (let i = 1; i < k.trail.length; i++) {
+                    ctx.lineTo(k.trail[i].x, k.trail[i].y);
+                }
+                let trailColor = 'rgba(56, 189, 248, 0.35)';
+                if (k.proximityAlert || k.status === 'GPS_DRIFT' || k.status === 'ROGUE') trailColor = 'rgba(244, 63, 94, 0.65)';
+                else if (k.airspaceRerouted) trailColor = 'rgba(52, 211, 153, 0.7)';
+                else if (k.status === 'COMM_LOST' || k.status === 'BATTERY_DEGRADED') trailColor = 'rgba(251, 191, 36, 0.48)';
+                else if (k.status === 'STOWING' || k.status === 'EMERGENCY_DESCENT') trailColor = 'rgba(192, 132, 252, 0.5)';
+                
+                ctx.strokeStyle = trailColor;
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // 3. High-Tension Tether Line
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(k.anchorX, k.anchorY);
+            ctx.lineTo(k.x, k.y);
+            ctx.strokeStyle = (k.proximityAlert || k.status === 'EMERGENCY_DESCENT')
+                ? 'rgba(244, 63, 94, 0.85)' 
+                : 'rgba(148, 163, 184, 0.32)';
+            ctx.lineWidth = (k.proximityAlert || k.status === 'EMERGENCY_DESCENT') ? 2 : 1.1;
+            ctx.stroke();
+            ctx.restore();
+
+            // 4. Ground Winch Station Node
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(k.anchorX, k.anchorY, 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#090d16';
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#64748b';
+            ctx.stroke();
+            ctx.restore();
+
+            // 5. Kite Wing Airfoil
+            ctx.save();
+            ctx.translate(k.x, k.y);
+            ctx.rotate(k.heading);
+
+            if (k.proximityAlert) {
+                ctx.beginPath();
+                ctx.arc(0, 0, 16, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(244, 63, 94, 0.25)';
+                ctx.fill();
+                ctx.strokeStyle = '#f43f5e';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+
+            let wingColor = '#38bdf8';
+            if (k.proximityAlert || k.status === 'GPS_DRIFT' || k.status === 'ROGUE') wingColor = '#f43f5e';
+            else if (k.airspaceRerouted) wingColor = '#34d399';
+            else if (k.status === 'COMM_LOST' || k.status === 'BATTERY_DEGRADED') wingColor = '#fbbf24';
+            else if (k.status === 'STOWING' || k.status === 'STOWED' || k.status === 'EMERGENCY_DESCENT') wingColor = '#c084fc';
+
+            ctx.beginPath();
+            ctx.moveTo(7.5, 0);
+            ctx.lineTo(-5, -9);
+            ctx.lineTo(-2, 0);
+            ctx.lineTo(-5, 9);
+            ctx.closePath();
+            ctx.fillStyle = wingColor;
+            ctx.fill();
+            ctx.restore();
+
+            // 6. Unit Telemetry Tag
+            ctx.save();
+            ctx.font = '500 9px "JetBrains Mono", monospace';
+            ctx.fillStyle = 'rgba(203, 213, 225, 0.75)';
+            ctx.fillText(`K-${String(k.id).padStart(2, '0')}`, k.anchorX - 11, k.anchorY + 14);
+            ctx.restore();
+        }
+
+        // Layout Ground Stations
+        function layoutFleet() {
+            const count = state.kiteCount;
+            const padX = 55;
+            const padY = 65;
+            const usableW = Math.max(200, state.width - padX * 2);
+            const usableH = Math.max(200, state.height - padY * 2);
+
+            const aspect = usableW / usableH;
+            const cols = Math.max(2, Math.round(Math.sqrt(count * aspect)));
+            const rows = Math.max(2, Math.ceil(count / cols));
+
+            const cellW = usableW / cols;
+            const cellH = usableH / rows;
+            const zoneRadius = Math.min(cellW, cellH) * 0.45;
+
+            const oldKites = state.kites;
+            state.kites = [];
+
+            let created = 0;
+            for (let r = 0; r < rows && created < count; r++) {
+                const itemsInRow = Math.min(cols, count - created);
+                const rowOffsetX = (usableW - itemsInRow * cellW) / 2;
+
+                for (let c = 0; c < itemsInRow; c++) {
+                    const id = created + 1;
+                    const stagger = (r % 2 === 1 && itemsInRow === cols) ? cellW * 0.12 : 0;
+                    const ax = padX + rowOffsetX + cellW * (c + 0.5) + stagger;
+                    const ay = padY + cellH * (r + 0.5);
+                    
+                    const phaseOffset = (r * 1.1) + (c * 1.57);
+                    const kite = new KiteUnit(id, created, ax, ay, zoneRadius, phaseOffset);
+                    
+                    if (oldKites[created]) {
+                        kite.individualCommLost = oldKites[created].individualCommLost;
+                    }
+                    state.kites.push(kite);
+                    created++;
+                }
+            }
+            assignDynamicFaultTargets();
+        }
+
+        function initWindParticles() {
+            state.windParticles = [];
+            for (let i = 0; i < 45; i++) {
+                state.windParticles.push({
+                    x: Math.random() * 1200,
+                    y: Math.random() * 800,
+                    len: 15 + Math.random() * 35,
+                    speed: 60 + Math.random() * 90,
+                    alpha: 0.05 + Math.random() * 0.12
+                });
+            }
+        }
+
+        // 5. Decoupled Airspace & Proximity Conflict Detection
+        function detectProximityConflicts(kitesList = state.kites) {
+            let activeConflicts = 0;
+            for (const k of kitesList) {
+                k.proximityAlert = false;
+            }
+
+            // Kite-to-Kite Separation Check
+            for (let i = 0; i < kitesList.length; i++) {
+                for (let j = i + 1; j < kitesList.length; j++) {
+                    const a = kitesList[i];
+                    const b = kitesList[j];
+                    if (a.status === 'STOWED' || b.status === 'STOWED') continue;
+
+                    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+                    const minSafeSep = Math.min(a.zoneRadius, b.zoneRadius) * 0.44;
+
+                    if (dist < minSafeSep) {
+                        a.proximityAlert = true;
+                        b.proximityAlert = true;
+                        activeConflicts++;
+                    }
+                }
+            }
+
+            // Safety enforcement always runs even if visual layer is hidden
+            if (state.enforceAirspace) {
+                for (const k of kitesList) {
+                    if (k.status === 'STOWED') continue;
+                    for (const z of state.airspaceZones) {
+                        if (Math.hypot(k.x - z.x, k.y - z.y) < z.radius) {
+                            k.proximityAlert = true;
+                            activeConflicts++;
+                        }
+                    }
+                }
+            }
+
+            state.collisionCount = activeConflicts;
+        }
+
+        // Render Collision Probability Heatmap Layer
+        function drawRiskHeatmap(ctx, kitesList = state.kites) {
+            if (!state.showHeatmap) return;
+            ctx.save();
+            for (let i = 0; i < kitesList.length; i++) {
+                for (let j = i + 1; j < kitesList.length; j++) {
+                    const a = kitesList[i];
+                    const b = kitesList[j];
+                    if (a.status === 'STOWED' || b.status === 'STOWED') continue;
+
+                    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+                    const warnThreshold = Math.min(a.zoneRadius, b.zoneRadius) * 0.85;
+
+                    if (dist < warnThreshold) {
+                        const intensity = Math.pow(1 - dist / warnThreshold, 1.5);
+                        const midX = (a.x + b.x) / 2;
+                        const midY = (a.y + b.y) / 2;
+                        const heatRadius = 48;
+
+                        const grad = ctx.createRadialGradient(midX, midY, 2, midX, midY, heatRadius);
+                        grad.addColorStop(0, `rgba(244, 63, 94, ${0.38 * intensity})`);
+                        grad.addColorStop(0.6, `rgba(251, 146, 60, ${0.16 * intensity})`);
+                        grad.addColorStop(1, 'rgba(244, 63, 94, 0)');
+
+                        ctx.fillStyle = grad;
+                        ctx.beginPath();
+                        ctx.arc(midX, midY, heatRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+            ctx.restore();
+        }
+
+        // Render Airspace Exclusion Zones (FAA Class D / TFR)
+        function drawAirspaceZones(ctx) {
+            if (!state.showAirspace) return;
+            ctx.save();
+            for (const z of state.airspaceZones) {
+                ctx.beginPath();
+                ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(239, 68, 68, 0.55)';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(z.x, z.y, z.radius * 0.65, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(239, 68, 68, 0.25)';
+                ctx.setLineDash([]);
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                ctx.font = '600 9px "JetBrains Mono", monospace';
+                ctx.fillStyle = 'rgba(252, 165, 165, 0.85)';
+                ctx.textAlign = 'center';
+                ctx.fillText(z.id, z.x, z.y - 3);
+                ctx.font = '400 8px "JetBrains Mono", monospace';
+                ctx.fillStyle = 'rgba(252, 165, 165, 0.6)';
+                ctx.fillText(z.type, z.x, z.y + 8);
+            }
+            ctx.restore();
+        }
+
+        // Render Rotating ATC Radar Sweep Beam
+        function drawRadarSweep(ctx) {
+            ctx.save();
+            const cx = state.width / 2;
+            const cy = state.height / 2;
+            const maxR = Math.hypot(cx, cy);
+            const sweepAngle = (state.time * 0.85) % (Math.PI * 2);
+
+            const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+            grad.addColorStop(0, 'rgba(56, 189, 248, 0.16)');
+            grad.addColorStop(1, 'rgba(56, 189, 248, 0.01)');
+
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, maxR, sweepAngle, sweepAngle + 0.38);
+            ctx.closePath();
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(sweepAngle + 0.38) * maxR, cy + Math.sin(sweepAngle + 0.38) * maxR);
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Record Snapshot for Mission Replay
+        function recordHistorySnapshot() {
+            state.history.push({
+                time: state.time,
+                windSpeed: state.windSpeed,
+                windAngle: state.windAngle,
+                kites: state.kites.map(k => ({
+                    id: k.id,
+                    anchorX: k.anchorX,
+                    anchorY: k.anchorY,
+                    zoneRadius: k.zoneRadius,
+                    x: k.x,
+                    y: k.y,
+                    heading: k.heading,
+                    status: k.status,
+                    proximityAlert: k.proximityAlert,
+                    airspaceRerouted: k.airspaceRerouted,
+                    trail: k.trail.map(pt => ({ x: pt.x, y: pt.y }))
+                }))
+            });
+            if (state.history.length > 360) {
+                state.history.shift();
+            }
+        }
+
+        // Main Animation Loop
+        let lastTimestamp = 0;
+        let missionSampleTimer = 0;
+        function animate(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const dt = Math.min(0.05, (timestamp - lastTimestamp) / 1000);
+            lastTimestamp = timestamp;
+
+            if (!state.isReplaying) {
+                state.time += dt;
+                state.currentMission.elapsedSec += dt;
+
+                if (state.severeWeather) {
+                    state.windSpeed = 31.8 + Math.sin(state.time * 4) * 3.6;
+                    state.windAngle = Math.sin(state.time * 1.7) * 0.32;
+                } else {
+                    state.windSpeed = 14.2 + Math.sin(state.time * 0.8) * 1.2;
+                    state.windAngle = Math.sin(state.time * 0.3) * 0.08;
+                }
+                state.currentMission.maxWind = Math.max(state.currentMission.maxWind, state.windSpeed);
+            }
+
+            ctx.clearRect(0, 0, state.width, state.height);
+
+            // Subtle Radar Grid & Range Rings
+            ctx.save();
+            ctx.strokeStyle = 'rgba(30, 41, 59, 0.4)';
+            ctx.lineWidth = 1;
+            const gridStep = 45;
+            for (let x = 0; x < state.width; x += gridStep) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, state.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < state.height; y += gridStep) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(state.width, y);
+                ctx.stroke();
+            }
+            const cx = state.width / 2;
+            const cy = state.height / 2;
+            [110, 220, 330].forEach(r => {
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(56, 189, 248, 0.06)';
+                ctx.stroke();
+            });
+            ctx.restore();
+
+            drawRadarSweep(ctx);
+
+            // Draw Wind Streamlines
+            ctx.save();
+            const windFactor = state.severeWeather ? 3.2 : 1.0;
+            for (const p of state.windParticles) {
+                p.x += Math.cos(state.windAngle) * p.speed * windFactor * dt;
+                p.y += Math.sin(state.windAngle) * p.speed * windFactor * dt;
+
+                if (p.x > state.width + 50) p.x = -50;
+                if (p.x < -50) p.x = state.width + 50;
+                if (p.y > state.height + 50) p.y = -50;
+                if (p.y < -50) p.y = state.height + 50;
+
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(
+                    p.x - Math.cos(state.windAngle) * p.len * (state.severeWeather ? 1.8 : 1),
+                    p.y - Math.sin(state.windAngle) * p.len * (state.severeWeather ? 1.8 : 1)
+                );
+                ctx.strokeStyle = state.severeWeather 
+                    ? `rgba(192, 132, 252, ${p.alpha * 1.8})` 
+                    : `rgba(56, 189, 248, ${p.alpha})`;
+                ctx.lineWidth = state.severeWeather ? 1.5 : 1;
+                ctx.stroke();
+            }
+            ctx.restore();
+
+            drawAirspaceZones(ctx);
+
+            // 3. Immutable Replay Rendering using structuredClone (Never mutates live state.kites)
+            if (state.isReplaying && state.replaySnapshots.length > 0) {
+                const snap = state.replaySnapshots[Math.floor(state.replayIndex)];
+                if (snap) {
+                    const remainingSec = ((state.replaySnapshots.length - state.replayIndex) / 30).toFixed(1);
+                    ui.replayText.textContent = `INCIDENT REPLAY // -${remainingSec}s`;
+
+                    const replayKites = structuredClone(snap.kites);
+                    drawRiskHeatmap(ctx, replayKites);
+                    for (const rk of replayKites) {
+                        renderKiteEntity(ctx, rk);
+                    }
+                }
+                state.replayIndex += 0.5;
+                if (state.replayIndex >= state.replaySnapshots.length) {
+                    exitReplayMode();
+                }
+            } else {
+                // Live Physics Step
+                for (const kite of state.kites) {
+                    kite.update(dt);
+                }
+                detectProximityConflicts(state.kites);
+                drawRiskHeatmap(ctx, state.kites);
+                for (const kite of state.kites) {
+                    kite.draw(ctx);
+                }
+
+                // Record History Snapshot @ ~30Hz
+                state.historyTimer += dt;
+                if (state.historyTimer >= 0.033) {
+                    state.historyTimer = 0;
+                    recordHistorySnapshot();
+                }
+            }
+
+            updateTelemetryUI(dt, missionSampleTimer);
+            missionSampleTimer += dt;
+            if (missionSampleTimer >= 1.0) {
+                missionSampleTimer = 0;
+            }
+            requestAnimationFrame(animate);
+        }
+
+        // 4. Smoothed Risk Index & SCADA Telemetry Update
+        let lastAlertState = 0;
+        function updateTelemetryUI(dt, sampleTimer) {
+            const displayedWind = state.sensorCorruptionActive 
+                ? state.windSpeed + (Math.random() - 0.5) * 6.5 
+                : state.windSpeed;
+            ui.wind.textContent = `${displayedWind.toFixed(1)} m/s`;
+            ui.wind.className = state.severeWeather ? 'text-purple-400 font-semibold' : 'text-sky-400 font-semibold';
+
+            let nominalCount = 0;
+            let holdingCount = 0;
+            let stowedCount = 0;
+            let alertCount = 0;
+            let totalPowerMW = 0;
+
+            const unitCubicMW = Math.min(1.25, 0.00012 * Math.pow(state.windSpeed, 3));
+
+            for (const k of state.kites) {
+                if (k.proximityAlert || k.status === 'GPS_DRIFT' || k.status === 'ROGUE' || k.status === 'EMERGENCY_DESCENT') {
+                    alertCount++;
+                }
+
+                if (k.status === 'STOWED' || k.status === 'STOWING' || k.status === 'EMERGENCY_DESCENT') {
+                    stowedCount++;
+                } else if (k.status === 'COMM_LOST' || k.status === 'BATTERY_DEGRADED') {
+                    holdingCount++;
+                    totalPowerMW += unitCubicMW * 0.45;
+                } else {
+                    nominalCount++;
+                    totalPowerMW += unitCubicMW;
+                }
+            }
+
+            state.totalPowerMW = state.severeWeather ? 0.0 : totalPowerMW;
+            ui.power.textContent = `${state.totalPowerMW.toFixed(2)} MW`;
+
+            // Accumulate Energy & Availability KPIs for Mission Archive
+            if (!state.isReplaying) {
+                state.currentMission.energyMWh += (state.totalPowerMW * dt) / 3600;
+                if (sampleTimer + dt >= 1.0) {
+                    const operationalUnits = nominalCount + holdingCount;
+                    const availPct = (operationalUnits / Math.max(1, state.kiteCount)) * 100;
+                    state.currentMission.availabilitySamples.push(availPct);
+                    state.currentMission.powerHistory.push(Number(state.totalPowerMW.toFixed(2)));
+                    if (state.currentMission.powerHistory.length > 60) {
+                        state.currentMission.powerHistory.shift();
+                    }
+                }
+            }
+
+            ui.metricNominal.textContent = nominalCount;
+            ui.metricHolding.textContent = holdingCount;
+            ui.metricStowed.textContent = stowedCount;
+            ui.metricAlerts.textContent = alertCount;
+
+            // Exponential Moving Average (EMA) Risk Smoothing
+            const rawRisk = Math.min(100, (state.collisionCount * 28) + (alertCount * 8));
+            state.riskIndex = state.riskIndex * 0.94 + rawRisk * 0.06;
+            ui.alerts.textContent = `${state.riskIndex.toFixed(1)}%`;
+
+            if (state.riskIndex > 4.0) {
+                ui.alerts.className = 'text-rose-400 font-bold';
+                if (lastAlertState === 0 && state.collisionCount > 0) {
+                    state.currentMission.nearMisses++;
+                    addLog(`PROXIMITY BREACH: ${state.collisionCount} corridor/airspace conflict(s) detected!`, 'danger');
+                    
+                    // Auto-log Incident Report (debounced every 5s) with await safeguard
+                    if (Date.now() - state.lastIncidentTime > 5000) {
+                        state.lastIncidentTime = Date.now();
+                        dbPut('incidents', {
+                            timestamp: new Date().toISOString(),
+                            missionId: state.currentMission.id,
+                            cause: 'Proximity / Airspace Breach',
+                            riskScore: Number(state.riskIndex.toFixed(1)),
+                            windSpeed: Number(state.windSpeed.toFixed(1)),
+                            replaySnapshot: structuredClone(state.history.slice(-90))
+                        }).catch(err => console.error("Failed to log incident:", err));
+                    }
+                }
+            } else {
+                ui.alerts.className = 'text-emerald-400 font-semibold';
+            }
+            lastAlertState = state.collisionCount;
+        }
+
+        // Interactive Canvas Pointer Events
+        canvas.addEventListener('mousedown', (e) => {
+            if (state.isReplaying) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            if (state.showAirspace) {
+                for (const z of state.airspaceZones) {
+                    if (Math.hypot(mx - z.x, my - z.y) <= z.radius) {
+                        state.draggingZone = z;
+                        return;
+                    }
+                }
+            }
+
+            let closest = null;
+            let minDist = 30;
+            for (const k of state.kites) {
+                const d = Math.hypot(k.x - mx, k.y - my);
+                if (d < minDist) {
+                    minDist = d;
+                    closest = k;
+                }
+            }
+
+            if (closest) {
+                closest.individualCommLost = !closest.individualCommLost;
+                if (closest.individualCommLost) {
+                    addLog(`Unit K-${String(closest.id).padStart(2, '0')} uplink severed. Engaging autonomous 52% holding orbit.`, 'warn');
+                } else {
+                    addLog(`Unit K-${String(closest.id).padStart(2, '0')} uplink restored. Resuming figure-8 harvest.`, 'success');
+                }
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!state.draggingZone) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            state.draggingZone.x = Math.min(state.width - state.draggingZone.radius, Math.max(state.draggingZone.radius, mx));
+            state.draggingZone.y = Math.min(state.height - state.draggingZone.radius, Math.max(state.draggingZone.radius, my));
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (state.draggingZone) {
+                addLog(`Airspace Zone ${state.draggingZone.id} repositioned. ATC dynamically recalculating corridor repulsion.`, 'info');
+                state.draggingZone = null;
+            }
+        });
+
+        // Mission Replay Handlers (Supports both live buffer and archived incident snapshots)
+        function startReplayMode(customSnapshots = null) {
+            const sourceBuffer = customSnapshots || state.history;
+            if (!sourceBuffer || sourceBuffer.length < 10) {
+                addLog('Insufficient telemetry buffer for replay. Wait a few seconds.', 'warn');
+                return;
+            }
+            state.isReplaying = true;
+            state.replaySnapshots = structuredClone(sourceBuffer);
+            state.replayIndex = 0;
+            ui.replayBanner.classList.remove('hidden');
+            ui.modeBadge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span> REPLAY BUFFER`;
+            ui.modeBadge.className = 'text-[10px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5';
+            addLog(customSnapshots ? 'Replaying archived Incident Report snapshot.' : 'Initiated 12-second Incident Telemetry Replay.', 'info');
+        }
+
+        function exitReplayMode() {
+            state.isReplaying = false;
+            ui.replayBanner.classList.add('hidden');
+            ui.modeBadge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 status-dot-live"></span> LIVE TELEMETRY`;
+            ui.modeBadge.className = 'text-[10px] font-mono uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5';
+        }
+
+        ui.btnReplay.addEventListener('click', () => startReplayMode(null));
+        ui.btnExitReplay.addEventListener('click', exitReplayMode);
+
+        // Export JSON Mission Logs & Record Export in IndexedDB
+        ui.btnExportJson.addEventListener('click', async () => {
+            const payload = {
+                exportedAt: new Date().toISOString(),
+                missionId: state.currentMission.id,
+                sector: 'SECTOR-04W',
+                telemetrySummary: {
+                    windSpeedMs: Number(state.windSpeed.toFixed(2)),
+                    gridPowerMW: Number(state.totalPowerMW.toFixed(2)),
+                    cumulativeEnergyMWh: Number(state.currentMission.energyMWh.toFixed(4)),
+                    riskIndexPct: Number(state.riskIndex.toFixed(1)),
+                    activeUnits: state.kiteCount
+                },
+                activeFaults: {
+                    geofencingEnabled: state.geofenceActive,
+                    commBlackout: state.commBlackout,
+                    severeWeather: state.severeWeather,
+                    gpsDrift: state.gpsDriftActive,
+                    tetherFailure: state.tetherFailureActive,
+                    sensorCorruption: state.sensorCorruptionActive,
+                    batteryFault: state.batteryFaultActive
+                },
+                auditLogs: state.auditLogs
+            };
+
+            try {
+                await dbPut('exports', {
+                    timestamp: payload.exportedAt,
+                    missionId: payload.missionId,
+                    logCount: payload.auditLogs.length
+                });
+            } catch (err) {
+                console.error("Failed to log export to DB:", err);
+            }
+
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `aero-grid-digital-twin-${state.currentMission.id}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            addLog('Exported Digital Twin telemetry & logged export receipt to IndexedDB.', 'success');
+        });
+
+        ui.btnCommitMission.addEventListener('click', () => saveCurrentMissionToDB(true));
+
+        // ============================================================================
+        // DIGITAL TWIN ARCHIVE & ANALYTICS DASHBOARD MODAL
+        // ============================================================================
+        async function renderArchiveDashboard() {
+            await saveCurrentMissionToDB(false);
+            const missions = await dbGetAll('missions');
+            const incidents = await dbGetAll('incidents');
+
+            // 1. Compute Fleet Reliability KPIs
+            const totalDurationSec = missions.reduce((acc, m) => acc + (m.durationSec || 0), 0);
+            const totalFaults = missions.reduce((acc, m) => acc + (m.faultsTriggered || 0), 0);
+            const totalEnergy = missions.reduce((acc, m) => acc + (m.energyMWh || 0), 0);
+            const avgAvail = missions.length > 0
+                ? missions.reduce((acc, m) => acc + (m.meanAvailability || 100), 0) / missions.length
+                : 100;
+            const avgMttr = missions.length > 0
+                ? missions.reduce((acc, m) => acc + (m.mttrSec || 4.0), 0) / missions.length
+                : 0;
+            const mtbfSec = totalFaults > 0 ? (totalDurationSec / totalFaults) : totalDurationSec;
+
+            document.getElementById('kpi-availability').textContent = `${avgAvail.toFixed(1)}%`;
+            document.getElementById('kpi-mtbf').textContent = totalFaults > 0 ? `${mtbfSec.toFixed(0)}s` : `${totalDurationSec}s (0 Faults)`;
+            document.getElementById('kpi-mttr').textContent = totalFaults > 0 ? `${avgMttr.toFixed(1)}s` : 'Nominal';
+            document.getElementById('kpi-energy').textContent = `${totalEnergy.toFixed(3)} MWh`;
+
+            // 2. Render Power Production Trend Sparkline
+            const trendCanvas = document.getElementById('powerTrendCanvas');
+            const tCtx = trendCanvas.getContext('2d');
+            const rect = trendCanvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            trendCanvas.width = (rect.width || 400) * dpr;
+            trendCanvas.height = (rect.height || 160) * dpr;
+            tCtx.setTransform(1, 0, 0, 1, 0, 0);
+            tCtx.scale(dpr, dpr);
+
+            const w = rect.width || 400;
+            const h = rect.height || 160;
+            tCtx.clearRect(0, 0, w, h);
+
+            const samples = state.currentMission.powerHistory.length > 1
+                ? state.currentMission.powerHistory
+                : [3.8, 4.1, 4.0, 4.3, 4.2];
+            const maxVal = Math.max(6, ...samples);
+
+            tCtx.beginPath();
+            samples.forEach((val, idx) => {
+                const px = (idx / Math.max(1, samples.length - 1)) * (w - 24) + 12;
+                const py = h - 18 - ((val / maxVal) * (h - 36));
+                if (idx === 0) tCtx.moveTo(px, py);
+                else tCtx.lineTo(px, py);
+            });
+            tCtx.strokeStyle = '#38bdf8';
+            tCtx.lineWidth = 2;
+            tCtx.stroke();
+
+            // 3. Render Fault Frequency Bars
+            const aggFaults = {
+                'Comm Blackout': 0,
+                'Severe Squall': 0,
+                'GPS Spoof/Drift': 0,
+                'Tether Tension': 0,
+                'Pitot Corruption': 0,
+                'Battery Fault': 0
+            };
+            missions.forEach(m => {
+                if (m.faultBreakdown) {
+                    Object.keys(aggFaults).forEach(k => {
+                        aggFaults[k] += (m.faultBreakdown[k] || 0);
+                    });
+                }
+            });
+            const maxFaultCount = Math.max(1, ...Object.values(aggFaults));
+            const barsContainer = document.getElementById('fault-bars-container');
+            barsContainer.innerHTML = Object.entries(aggFaults).map(([name, count]) => {
+                const pct = Math.round((count / maxFaultCount) * 100);
+                return `
+                    <div>
+                        <div class="flex justify-between text-[11px] text-slate-300 mb-1">
+                            <span>${name}</span>
+                            <span class="text-sky-400">${count}</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-sky-400 rounded-full" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // 4. Populate Mission Archive Table
+            const tbody = document.getElementById('missions-table-body');
+            tbody.innerHTML = missions.slice().reverse().map(m => `
+                <tr class="hover:bg-slate-800/40">
+                    <td class="py-2.5 px-3 font-semibold text-sky-300">${m.id}</td>
+                    <td class="py-2.5 px-3 text-slate-300">${m.durationSec}s</td>
+                    <td class="py-2.5 px-3 text-purple-300">${m.maxWind} m/s</td>
+                    <td class="py-2.5 px-3 text-emerald-400">${m.energyMWh.toFixed(4)} MWh</td>
+                    <td class="py-2.5 px-3 text-amber-300">${m.faultsTriggered}</td>
+                    <td class="py-2.5 px-3 text-rose-400">${m.nearMisses}</td>
+                </tr>
+            `).join('') || `<tr><td colspan="6" class="py-6 text-center text-slate-500">No archived missions yet.</td></tr>`;
+
+            // 5. Populate Incident Reports List
+            const incList = document.getElementById('incidents-list');
+            incList.innerHTML = incidents.slice().reverse().map((inc, idx) => `
+                <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-mono font-semibold text-rose-400">${inc.cause}</span>
+                            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">${inc.missionId}</span>
+                        </div>
+                        <div class="text-[11px] font-mono text-slate-400 mt-1">
+                            ${inc.timestamp} // Risk Score: <span class="text-amber-300">${inc.riskScore}%</span> // Wind: ${inc.windSpeed} m/s
+                        </div>
+                    </div>
+                    ${inc.replaySnapshot ? `
+                        <button data-inc-idx="${incidents.length - 1 - idx}" class="btn-replay-incident px-3 py-1.5 rounded-lg text-xs font-mono bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition">
+                            Load Replay Snapshot
+                        </button>
+                    ` : '<span class="text-[10px] font-mono text-slate-600">No Snapshot</span>'}
+                </div>
+            `).join('') || `<div class="py-8 text-center text-xs font-mono text-slate-500">No anomalies or near-misses recorded yet. Trigger a fault to generate an Incident Report.</div>`;
+
+            // Attach replay handlers to incident cards
+            document.querySelectorAll('.btn-replay-incident').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const incIdx = parseInt(btn.getAttribute('data-inc-idx'), 10);
+                    const targetIncident = incidents[incIdx];
+                    if (targetIncident && targetIncident.replaySnapshot) {
+                        ui.archiveModal.classList.add('hidden');
+                        startReplayMode(targetIncident.replaySnapshot);
+                    }
+                });
+            });
+        }
+
+        ui.btnOpenArchive.addEventListener('click', () => {
+            ui.archiveModal.classList.remove('hidden');
+            renderArchiveDashboard();
+        });
+
+        ui.btnCloseArchive.addEventListener('click', () => {
+            ui.archiveModal.classList.add('hidden');
+        });
+
+        ui.btnClearDb.addEventListener('click', async () => {
+            if (confirm("Delete all archived missions, incident reports, and telemetry exports?")) {
+                await dbClearAll();
+                addLog('IndexedDB Mission & Incident Archive purged.', 'warn');
+                renderArchiveDashboard();
+            }
+        });
+
+        document.querySelectorAll('.archive-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.archive-tab').forEach(t => {
+                    t.classList.remove('border-sky-400', 'text-sky-300', 'bg-slate-900');
+                    t.classList.add('border-transparent', 'text-slate-400');
+                });
+                tab.classList.add('border-sky-400', 'text-sky-300', 'bg-slate-900');
+                tab.classList.remove('border-transparent', 'text-slate-400');
+
+                const target = tab.getAttribute('data-tab');
+                document.querySelectorAll('.archive-pane').forEach(p => p.classList.add('hidden'));
+                document.getElementById(`tab-${target}`).classList.remove('hidden');
+            });
+        });
+
+        // Control & Toggle Listeners
+        ui.densitySlider.addEventListener('input', (e) => {
+            state.kiteCount = parseInt(e.target.value, 10);
+            ui.densityVal.textContent = `${state.kiteCount} Kites`;
+            layoutFleet();
+            addLog(`Fleet density scaled to ${state.kiteCount} airborne units. Corridors & fault targets re-indexed.`, 'info');
+        });
+
+        ui.geofenceToggle.addEventListener('change', (e) => {
+            state.geofenceActive = e.target.checked;
+            if (state.geofenceActive) {
+                addLog('ATC Geofencing & Exclusion Avoidance ENABLED. Phase-locked trajectories active.', 'success');
+            } else {
+                addLog('CRITICAL: Geofencing DISABLED. Uncoordinated sweeps & airspace breaches imminent.', 'danger');
+            }
+        });
+
+        function toggleFilterBtn(btn, active, activeClasses) {
+            btn.className = active
+                ? `px-2.5 py-1 rounded-lg text-xs font-medium ${activeClasses} transition`
+                : 'px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-900 text-slate-400 border border-slate-800 transition';
+        }
+
+        ui.btnShowZones.addEventListener('click', () => {
+            state.showZones = !state.showZones;
+            toggleFilterBtn(ui.btnShowZones, state.showZones, 'bg-sky-500/20 text-sky-300 border border-sky-500/30');
+        });
+
+        ui.btnShowAirspace.addEventListener('click', () => {
+            state.showAirspace = !state.showAirspace;
+            toggleFilterBtn(ui.btnShowAirspace, state.showAirspace, 'bg-rose-500/20 text-rose-300 border border-rose-500/30');
+            addLog(state.showAirspace 
+                ? 'Airspace Exclusion Layer overlay visible.' 
+                : 'Airspace Exclusion Layer hidden (Safety geofence enforcement remains active).', 'info');
+        });
+
+        ui.btnShowHeatmap.addEventListener('click', () => {
+            state.showHeatmap = !state.showHeatmap;
+            toggleFilterBtn(ui.btnShowHeatmap, state.showHeatmap, 'bg-sky-500/20 text-sky-300 border border-sky-500/30');
+        });
+
+        ui.btnShowTrails.addEventListener('click', () => {
+            state.showTrails = !state.showTrails;
+            toggleFilterBtn(ui.btnShowTrails, state.showTrails, 'bg-sky-500/20 text-sky-300 border border-sky-500/30');
+        });
+
+        // Threat & Fault Injection Buttons (Integrated with IndexedDB Incident & MTTR Tracker)
+        ui.btnCommDrop.addEventListener('click', async () => {
+            state.commBlackout = !state.commBlackout;
+            await recordFaultEvent('Comm Blackout', state.commBlackout);
+            ui.badgeComm.textContent = state.commBlackout ? 'ACTIVE' : 'OFF';
+            ui.btnCommDrop.classList.toggle('ring-2', state.commBlackout);
+            ui.btnCommDrop.classList.toggle('ring-amber-400/60', state.commBlackout);
+            addLog(state.commBlackout 
+                ? 'FLEET COMM BLACKOUT: Edge flight controllers executing 52% circular holding orbits.' 
+                : 'Central ATC telemetry uplink restored.', state.commBlackout ? 'warn' : 'success');
+        });
+
+        ui.btnWeather.addEventListener('click', async () => {
+            state.severeWeather = !state.severeWeather;
+            await recordFaultEvent('Severe Squall', state.severeWeather);
+            ui.badgeWeather.textContent = state.severeWeather ? 'SQUALL' : 'CALM';
+            ui.btnWeather.classList.toggle('ring-2', state.severeWeather);
+            ui.btnWeather.classList.toggle('ring-purple-400/60', state.severeWeather);
+            addLog(state.severeWeather 
+                ? 'MICROBURST ALERT: Wind > 31 m/s. Cut-out threshold exceeded; winching fleet to ground.' 
+                : 'Squall subsided. Relaunching stowed units to operational altitude.', state.severeWeather ? 'weather' : 'success');
+        });
+
+        ui.btnGpsDrift.addEventListener('click', async () => {
+            state.gpsDriftActive = !state.gpsDriftActive;
+            assignDynamicFaultTargets();
+            await recordFaultEvent('GPS Spoof/Drift', state.gpsDriftActive);
+            ui.badgeGps.textContent = state.gpsDriftActive ? 'DRIFT' : 'OFF';
+            ui.btnGpsDrift.classList.toggle('ring-2', state.gpsDriftActive);
+            ui.btnGpsDrift.classList.toggle('ring-rose-400/60', state.gpsDriftActive);
+            const targetLabels = state.gpsFaultIndices.map(i => `K-${String(i+1).padStart(2,'0')}`).join(', ');
+            addLog(state.gpsDriftActive 
+                ? `GNSS SPOOF / DRIFT: Units ${targetLabels} experiencing positional bias.` 
+                : 'GNSS integrity verified. Positional drift corrected.', state.gpsDriftActive ? 'danger' : 'success');
+        });
+
+        ui.btnTetherFail.addEventListener('click', async () => {
+            state.tetherFailureActive = !state.tetherFailureActive;
+            assignDynamicFaultTargets();
+            await recordFaultEvent('Tether Tension', state.tetherFailureActive);
+            ui.badgeTether.textContent = state.tetherFailureActive ? 'RECALL' : 'NOM';
+            ui.btnTetherFail.classList.toggle('ring-2', state.tetherFailureActive);
+            ui.btnTetherFail.classList.toggle('ring-orange-400/60', state.tetherFailureActive);
+            const targetLabels = state.tetherFaultIndices.map(i => `K-${String(i+1).padStart(2,'0')}`).join(', ');
+            addLog(state.tetherFailureActive 
+                ? `TETHER TENSION ANOMALY: Units ${targetLabels} executing emergency rapid descent.` 
+                : 'Tether tension nominal across all winches.', state.tetherFailureActive ? 'danger' : 'success');
+        });
+
+        ui.btnSensorCorrupt.addEventListener('click', async () => {
+            state.sensorCorruptionActive = !state.sensorCorruptionActive;
+            await recordFaultEvent('Pitot Corruption', state.sensorCorruptionActive);
+            ui.badgeSensor.textContent = state.sensorCorruptionActive ? 'NOISE' : 'OFF';
+            ui.btnSensorCorrupt.classList.toggle('ring-2', state.sensorCorruptionActive);
+            ui.btnSensorCorrupt.classList.toggle('ring-cyan-400/60', state.sensorCorruptionActive);
+            addLog(state.sensorCorruptionActive 
+                ? 'PITOT SENSOR CORRUPTION: High-frequency wind vector noise injected into flight estimators.' 
+                : 'Pitot-static sensor fusion stabilized.', state.sensorCorruptionActive ? 'warn' : 'success');
+        });
+
+        ui.btnBatteryFault.addEventListener('click', async () => {
+            state.batteryFaultActive = !state.batteryFaultActive;
+            await recordFaultEvent('Battery Fault', state.batteryFaultActive);
+            ui.badgeBattery.textContent = state.batteryFaultActive ? 'LOW' : '100%';
+            ui.btnBatteryFault.classList.toggle('ring-2', state.batteryFaultActive);
+            // TORQUE-ADDED: remainder of this handler exists in no source. Written by Torque
+            // following the pattern of the other five fault handlers; ring class evidenced by the reset handler.
+            ui.btnBatteryFault.classList.toggle('ring-yellow-400/60', state.batteryFaultActive);
+            addLog(state.batteryFaultActive
+                ? 'EDGE BATTERY LOW: Onboard autonomy degraded on affected units.'
+                : 'Edge battery nominal. Onboard autonomy restored.', state.batteryFaultActive ? 'warn' : 'success');
+        });
+
+        ui.btnReset.addEventListener('click', async () => {
+            await saveCurrentMissionToDB(false);
+            exitReplayMode();
+            state.commBlackout = false;
+            state.severeWeather = false;
+            state.gpsDriftActive = false;
+            state.tetherFailureActive = false;
+            state.sensorCorruptionActive = false;
+            state.batteryFaultActive = false;
+            state.geofenceActive = true;
+            ui.geofenceToggle.checked = true;
+
+            ui.badgeComm.textContent = 'OFF';
+            ui.badgeWeather.textContent = 'CALM';
+            ui.badgeGps.textContent = 'OFF';
+            ui.badgeTether.textContent = 'NOM';
+            ui.badgeSensor.textContent = 'OFF';
+            ui.badgeBattery.textContent = '100%';
+
+            [ui.btnCommDrop, ui.btnWeather, ui.btnGpsDrift, ui.btnTetherFail, ui.btnSensorCorrupt, ui.btnBatteryFault].forEach(btn => {
+                btn.classList.remove('ring-2', 'ring-amber-400/60', 'ring-purple-400/60', 'ring-rose-400/60', 'ring-orange-400/60', 'ring-cyan-400/60', 'ring-yellow-400/60');
+            });
+
+            // Initialize fresh mission ID using crypto.randomUUID for guaranteed non-collision
+            state.currentMission = {
+                id: `MSN-${crypto.randomUUID ? crypto.randomUUID().slice(0, 8).toUpperCase() : Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+                startTime: Date.now(),
+                elapsedSec: 0,
+                maxWind: 14.2,
+                energyMWh: 0,
+                faultsTriggered: 0,
+                nearMisses: 0,
+                availabilitySamples: [],
+                powerHistory: [],
+                faultBreakdown: {
+                    'Comm Blackout': 0,
+                    'Severe Squall': 0,
+                    'GPS Spoof/Drift': 0,
+                    'Tether Tension': 0,
+                    'Pitot Corruption': 0,
+                    'Battery Fault': 0
+                },
+                activeFaultStart: null,
+                recoveryDurationsSec: []
+            };
+
+            state.kites.forEach(k => k.individualCommLost = false);
+            layoutFleet();
+            addLog(`Previous mission archived. New Digital Twin session ${state.currentMission.id} started.`, 'info');
+        });
+
+        // Boot Digital Twin Platform
+        // TORQUE-ADDED: boot sequence exists in no source. Written by Torque: resize listener,
+        // IndexedDB init, then canvas/particles/startup log/animation start; the catch branch
+        // still boots the sim if IndexedDB fails. Startup log format evidenced by the live
+        // Canvas preview; log level 'success' is Torque's choice.
+        window.addEventListener('resize', resizeCanvas);
+        initDB().then(() => {
+            resizeCanvas();
+            initWindParticles();
+            addLog(`AERO-GRID Digital Twin online (${state.currentMission.id}). IndexedDB Mission & Incident Archive active.`, 'success');
+            requestAnimationFrame(animate);
+        }).catch((err) => {
+            console.error('IndexedDB unavailable; running without persistence:', err);
+            resizeCanvas();
+            initWindParticles();
+            addLog(`AERO-GRID Digital Twin online (${state.currentMission.id}). IndexedDB unavailable; running without persistence.`, 'warn');
+            requestAnimationFrame(animate);
+        });
+    </script>
+</body>
+</html>

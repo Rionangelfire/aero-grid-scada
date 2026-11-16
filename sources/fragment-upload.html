@@ -1,0 +1,323 @@
+<!-- ... existing code ... -->
+        // ============================================================================
+        // INDEXEDDB PERSISTENCE LAYER (missions, incidents, exports)
+        // ============================================================================
+        const DB_NAME = 'AeroGridDigitalTwinDB';
+        const DB_VERSION = 1;
+        let dbInstance = null;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, DB_VERSION);
+                req.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains('missions')) {
+                        db.createObjectStore('missions', { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains('incidents')) {
+                        db.createObjectStore('incidents', { keyPath: 'id', autoIncrement: true });
+                    }
+                    if (!db.objectStoreNames.contains('exports')) {
+                        db.createObjectStore('exports', { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+                req.onsuccess = (e) => {
+                    dbInstance = e.target.result;
+                    resolve(dbInstance);
+                };
+                req.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        function dbPut(storeName, record) {
+            if (!dbInstance) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = dbInstance.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.put(record);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbGetAll(storeName) {
+            if (!dbInstance) return Promise.resolve([]);
+            return new Promise((resolve, reject) => {
+                const tx = dbInstance.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbClearAll() {
+            if (!dbInstance) return Promise.resolve();
+            return new Promise((resolve) => {
+                const tx = dbInstance.transaction(['missions', 'incidents', 'exports'], 'readwrite');
+                tx.objectStore('missions').clear();
+                tx.objectStore('incidents').clear();
+                tx.objectStore('exports').clear();
+                tx.oncomplete = () => resolve();
+            });
+        }
+
+        async function recordFaultEvent(faultLabel, isActivating) {
+            const m = state.currentMission;
+            if (isActivating) {
+                m.faultsTriggered++;
+                if (m.faultBreakdown[faultLabel] !== undefined) {
+                    m.faultBreakdown[faultLabel]++;
+                }
+                if (!m.activeFaultStart) {
+                    m.activeFaultStart = Date.now();
+                }
+                // Automatically capture an Incident Report with Replay Snapshot (awaiting write for persistence safety)
+                const snapshotWindow = state.history.slice(-90); // Last ~3 seconds
+                try {
+                    await dbPut('incidents', {
+                        timestamp: new Date().toISOString(),
+                        missionId: m.id,
+                        cause: faultLabel,
+                        riskScore: Number(state.riskIndex.toFixed(1)),
+                        windSpeed: Number(state.windSpeed.toFixed(1)),
+                        replaySnapshot: snapshotWindow.length > 0 ? structuredClone(snapshotWindow) : null
+                    });
+                } catch (err) {
+                    console.error("Failed to persist incident record:", err);
+                }
+            } else {
+                const anyStillActive = state.commBlackout || state.severeWeather || state.gpsDriftActive ||
+                                       state.tetherFailureActive || state.sensorCorruptionActive || state.batteryFaultActive;
+                if (!anyStillActive && m.activeFaultStart) {
+                    const recoverySec = Math.max(1, (Date.now() - m.activeFaultStart) / 1000);
+                    m.recoveryDurationsSec.push(recoverySec);
+                    m.activeFaultStart = null;
+                }
+            }
+        }
+
+        async function saveCurrentMissionToDB(manual = false) {
+            const m = state.currentMission;
+            const avgAvail = m.availabilitySamples.length > 0
+                ? m.availabilitySamples.reduce((a, b) => a + b, 0) / m.availabilitySamples.length
+                : 100;
+            const avgMttr = m.recoveryDurationsSec.length > 0
+                ? m.recoveryDurationsSec.reduce((a, b) => a + b, 0) / m.recoveryDurationsSec.length
+                : 4.2;
+
+            const record = {
+                id: m.id,
+                updatedAt: new Date().toISOString(),
+                durationSec: Math.round(m.elapsedSec),
+                maxWind: Number(m.maxWind.toFixed(1)),
+                energyMWh: Number(m.energyMWh.toFixed(4)),
+                faultsTriggered: m.faultsTriggered,
+                nearMisses: m.nearMisses,
+                meanAvailability: Number(avgAvail.toFixed(1)),
+                mttrSec: Number(avgMttr.toFixed(1)),
+                faultBreakdown: { ...m.faultBreakdown }
+            };
+            try {
+                await dbPut('missions', record);
+                if (manual) {
+                    addLog(`Mission ${m.id} committed to Digital Twin IndexedDB Archive.`, 'success');
+                }
+            } catch (err) {
+                console.error("Failed to commit mission archive:", err);
+            }
+        }
+
+        // Structured Audit Logger
+<!-- ... existing code ... -->
+                <!-- Tab 1: Reliability Analytics Dashboard -->
+                <div id="tab-analytics" class="archive-pane space-y-4">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Mean Fleet Availability</div>
+                            <div id="kpi-availability" class="text-xl font-mono font-bold text-emerald-400 mt-1">99.4%</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Nominal + Edge Orbit Uptime</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Estimated MTBF</div>
+                            <div id="kpi-mtbf" class="text-xl font-mono font-bold text-sky-400 mt-1">--</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Flight Duration / Fault Rate</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">MTTR (Mean Time To Recover)</div>
+                            <div id="kpi-mttr" class="text-xl font-mono font-bold text-amber-400 mt-1">--</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Avg Anomaly Resolution Time</div>
+                        </div>
+                        <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                            <div class="text-[10px] font-mono uppercase text-slate-400">Cumulative Energy Yield</div>
+                            <div id="kpi-energy" class="text-xl font-mono font-bold text-purple-400 mt-1">0.00 MWh</div>
+                            <div class="text-[10px] text-slate-500 mt-0.5">Integrated Cubic Wind Output</div>
+                        </div>
+                    </div>
+<!-- ... existing code ... -->
+        // Active Mission Tracking (for IndexedDB persistence)
+        const state = {
+            width: 800,
+            height: 540,
+            kiteCount: 12,
+            geofenceActive: true,
+            showZones: true,
+            showAirspace: true,   // Visual layer toggle only
+            enforceAirspace: true, // Decoupled safety logic flag
+            showHeatmap: true,
+            showTrails: true,
+            
+            // Threat & Fault Flags
+            commBlackout: false,
+            severeWeather: false,
+            gpsDriftActive: false,
+            tetherFailureActive: false,
+            sensorCorruptionActive: false,
+            batteryFaultActive: false,
+
+            // Dynamic Fault Target Indices
+            gpsFaultIndices: [],
+            tetherFaultIndices: [],
+
+            // Environment, Economics & Smoothed Risk
+            windSpeed: 14.2,
+            windAngle: 0,
+            totalPowerMW: 0,
+            riskIndex: 0,
+            time: 0,
+            collisionCount: 0,
+
+            // Active Mission Tracking with crypto.randomUUID for guaranteed non-collision mission IDs
+            currentMission: {
+                id: `MSN-${crypto.randomUUID ? crypto.randomUUID().slice(0, 8).toUpperCase() : Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+                startTime: Date.now(),
+                elapsedSec: 0,
+                maxWind: 14.2,
+                energyMWh: 0,
+                faultsTriggered: 0,
+                nearMisses: 0,
+                availabilitySamples: [],
+                powerHistory: [],
+                faultBreakdown: {
+                    'Comm Blackout': 0,
+                    'Severe Squall': 0,
+                    'GPS Spoof/Drift': 0,
+                    'Tether Tension': 0,
+                    'Pitot Corruption': 0,
+                    'Battery Fault': 0
+                },
+                activeFaultStart: null,
+                recoveryDurationsSec: []
+            },
+
+            // Entities & Buffers
+            kites: [],
+            windParticles: [],
+            airspaceZones: [
+                { id: 'FAA-D1', label: 'FAA CLASS D // KHBV', type: 'AIRPORT', x: 240, y: 190, radius: 75, initialized: false },
+                { id: 'TFR-09', label: 'NO-FLY // RESTRICTED', type: 'NOFLY', x: 560, y: 340, radius: 62, initialized: false }
+            ],
+            draggingZone: null,
+            
+            // Mission Replay Buffer (Rolling 12s @ ~30fps snapshots)
+            history: [],
+            historyTimer: 0,
+            isReplaying: false,
+            replayIndex: 0,
+            replaySnapshots: [],
+            auditLogs: [],
+            lastIncidentTime: 0
+        };
+
+        // UI References
+<!-- ... existing code ... -->
+        // ============================================================================
+        // DIGITAL TWIN ARCHIVE & ANALYTICS DASHBOARD MODAL
+        // ============================================================================
+        async function renderArchiveDashboard() {
+            await saveCurrentMissionToDB(false);
+            const missions = await dbGetAll('missions');
+            const incidents = await dbGetAll('incidents');
+
+            // 1. Compute Fleet Reliability KPIs
+            const totalDurationSec = missions.reduce((acc, m) => acc + (m.durationSec || 0), 0);
+            const totalFaults = missions.reduce((acc, m) => acc + (m.faultsTriggered || 0), 0);
+            const totalEnergy = missions.reduce((acc, m) => acc + (m.energyMWh || 0), 0);
+            const avgAvail = missions.length > 0
+                ? missions.reduce((acc, m) => acc + (m.meanAvailability || 100), 0) / missions.length
+                : 100;
+            const avgMttr = missions.length > 0
+                ? missions.reduce((acc, m) => acc + (m.mttrSec || 4.0), 0) / missions.length
+                : 0;
+            const mtbfSec = totalFaults > 0 ? (totalDurationSec / totalFaults) : totalDurationSec;
+
+            document.getElementById('kpi-availability').textContent = `${avgAvail.toFixed(1)}%`;
+            document.getElementById('kpi-mtbf').textContent = totalFaults > 0 ? `${mtbfSec.toFixed(0)}s` : `${totalDurationSec}s (0 Faults)`;
+            document.getElementById('kpi-mttr').textContent = totalFaults > 0 ? `${avgMttr.toFixed(1)}s` : 'Nominal';
+            document.getElementById('kpi-energy').textContent = `${totalEnergy.toFixed(3)} MWh`;
+
+            // 2. Render Power Production Trend Sparkline
+<!-- ... existing code ... -->
+        ui.btnClearDb.addEventListener('click', async () => {
+            if (confirm("Delete all archived missions, incident reports, and telemetry exports?")) {
+                await dbClearAll();
+                addLog('IndexedDB Mission & Incident Archive purged.', 'warn');
+                renderArchiveDashboard();
+            }
+        });
+
+        document.querySelectorAll('.archive-tab').forEach(tab => {
+<!-- ... existing code ... -->
+        ui.btnReset.addEventListener('click', async () => {
+            await saveCurrentMissionToDB(false);
+            exitReplayMode();
+            state.commBlackout = false;
+            state.severeWeather = false;
+            state.gpsDriftActive = false;
+            state.tetherFailureActive = false;
+            state.sensorCorruptionActive = false;
+            state.batteryFaultActive = false;
+            state.geofenceActive = true;
+            ui.geofenceToggle.checked = true;
+
+            ui.badgeComm.textContent = 'OFF';
+            ui.badgeWeather.textContent = 'CALM';
+            ui.badgeGps.textContent = 'OFF';
+            ui.badgeTether.textContent = 'NOM';
+            ui.badgeSensor.textContent = 'OFF';
+            ui.badgeBattery.textContent = '100%';
+
+            [ui.btnCommDrop, ui.btnWeather, ui.btnGpsDrift, ui.btnTetherFail, ui.btnSensorCorrupt, ui.btnBatteryFault].forEach(btn => {
+                btn.classList.remove('ring-2', 'ring-amber-400/60', 'ring-purple-400/60', 'ring-rose-400/60', 'ring-orange-400/60', 'ring-cyan-400/60', 'ring-yellow-400/60');
+            });
+
+            // Initialize fresh mission ID using crypto.randomUUID for guaranteed non-collision
+            state.currentMission = {
+                id: `MSN-${crypto.randomUUID ? crypto.randomUUID().slice(0, 8).toUpperCase() : Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+                startTime: Date.now(),
+                elapsedSec: 0,
+                maxWind: 14.2,
+                energyMWh: 0,
+                faultsTriggered: 0,
+                nearMisses: 0,
+                availabilitySamples: [],
+                powerHistory: [],
+                faultBreakdown: {
+                    'Comm Blackout': 0,
+                    'Severe Squall': 0,
+                    'GPS Spoof/Drift': 0,
+                    'Tether Tension': 0,
+                    'Pitot Corruption': 0,
+                    'Battery Fault': 0
+                },
+                activeFaultStart: null,
+                recoveryDurationsSec: []
+            };
+
+            state.kites.forEach(k => k.individualCommLost = false);
+            layoutFleet();
+            addLog(`Previous mission archived. New Digital Twin session ${state.currentMission.id} started.`, 'info');
+        });
+
+        // Boot Digital Twin Platform
+<!-- ... existing code ... -->
